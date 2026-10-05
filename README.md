@@ -1,81 +1,140 @@
 # MikroTik + Home Assistant
 
-Shows your MikroTik router's LAN and WAN statistics in Home Assistant, and
-lets you turn the WAN interface and the Wi-Fi interfaces managed by CAPsMAN
-on and off. It uses the built-in RouterOS v7 REST API, so you don't need to
-install anything on the router or any custom component in Home Assistant.
+A Home Assistant custom integration that talks to a MikroTik router over the
+RouterOS API. It gives you:
 
-## What you get
+- **WAN and LAN statistics:** live download/upload rates and byte counters,
+  plus whether the WAN link is up.
+- **Router health:** CPU, memory and last boot time.
+- **WAN switch:** turns the WAN interface on and off.
+- **A switch for each Wi-Fi network (SSID):** Wi-Fi networks managed by
+  CAPsMAN are found automatically, one switch per SSID. A switch turns that
+  SSID on or off on every CAP and band at once, which makes it handy for
+  guest or IoT networks you only turn on when needed. Each SSID also gets a
+  connected-clients sensor.
+- **Optional switches** for any other interfaces you pick.
 
-| Entity | What it shows / does |
-| --- | --- |
-| `sensor.mikrotik_wan_download` / `_upload` | Live WAN rate (Mbit/s, every 10 s) |
-| `sensor.mikrotik_wan_downloaded` / `_uploaded` | WAN byte counters, with daily and monthly totals through `utility_meter` |
-| `binary_sensor.mikrotik_wan_running` | Whether the WAN link is up |
-| `sensor.mikrotik_lan_rx` / `_tx` | Live LAN (bridge) rate |
-| `sensor.mikrotik_lan_received` / `_sent` | LAN byte counters |
-| `sensor.mikrotik_cpu_load`, `_memory_used`, `_uptime`, `_routeros_version` | Router health |
-| `sensor.mikrotik_wi_fi_clients` | Number of Wi-Fi clients across all CAPs |
-| `switch.mikrotik_wan` | Turns the WAN interface on and off |
-| `switch.mikrotik_wifi1`, `switch.mikrotik_wifi2` | Turns CAPsMAN Wi-Fi interfaces on and off |
+It works with the new CAPsMAN (RouterOS 7 `wifi` package: `wifi-qcom`,
+`wifi-qcom-ac`) and with legacy CAPsMAN (`/caps-man`). It detects which one
+you use on its own.
 
-## Setup
+## 1. Prepare the router
 
-### 1. Router (on the CAPsMAN controller)
+Run this on the CAPsMAN controller.
 
 1. Edit the variables at the top of `routeros/ha-setup.rsc`: the Home
    Assistant IP and a strong password.
-2. Upload the file (Winbox → Files, drag and drop) and run
-   `/import file-name=ha-setup.rsc`.
-3. Find the names of your interfaces:
-   ```
-   /interface print where type=ether or type=bridge or type=pppoe-out
-   /interface wifi print        # new CAPsMAN (wifi-qcom / wifi-qcom-ac)
-   /caps-man interface print    # legacy CAPsMAN (wireless package)
-   ```
-4. Check it from the Home Assistant host:
-   ```
-   curl -k -u homeassistant:PASSWORD https://192.168.88.1/rest/system/resource
-   ```
+2. Upload the file (Winbox → Files) and run `/import file-name=ha-setup.rsc`.
 
-### 2. Home Assistant
+   The script creates a `homeassistant` user that can only log in from the
+   Home Assistant IP. It also enables **api-ssl** (port 8729) with a
+   self-signed certificate.
 
-1. Enable packages in `configuration.yaml` if you haven't already:
-   ```yaml
-   homeassistant:
-     packages: !include_dir_named packages
-   ```
-2. Copy `homeassistant/packages/mikrotik.yaml` into `<config>/packages/`.
-3. Edit the placeholders listed at the top of that file: the router IP
-   `192.168.88.1`, WAN `ether1`, LAN `bridge`, and Wi-Fi `wifi1`/`wifi2`.
-   Add or remove Wi-Fi switch blocks to match your CAPs.
-4. Add `mikrotik_user` and `mikrotik_password` to `secrets.yaml` (see
-   `homeassistant/secrets.yaml.example`).
-5. Developer tools → YAML → Check configuration, then restart.
+### Make your on-demand Wi-Fi networks switchable
 
-## Notes
+RouterOS only lets you enable or disable **static** Wi-Fi interfaces.
+Interfaces that CAPsMAN creates dynamically can't be switched, and the
+switch shows an error if you try. Check yours:
 
-- **PPPoE / LTE WAN:** for the traffic sensors, point them at the logical
-  interface (for example `pppoe-out1`). The WAN switch can stay on the
-  physical port.
-- **Disabling the WAN cuts internet access,** including Nabu Casa or any
+```
+/interface wifi print         # new CAPsMAN: a "D" flag means dynamic
+/caps-man interface print     # legacy CAPsMAN
+```
+
+If they show `D`, change the provisioning rule so it creates static
+interfaces, then provision again:
+
+```
+# new CAPsMAN
+/interface wifi provisioning set [find] action=create-enabled
+/interface wifi radio provision [find]
+
+# legacy CAPsMAN
+/caps-man provisioning set [find] action=create-enabled
+/caps-man remote-cap provision [find]
+```
+
+Your guest/IoT SSIDs stay in `slave-configurations` as before. After
+provisioning, each SSID gets its own static interface on every CAP, and the
+integration groups them under one switch per SSID.
+
+## 2. Install the integration
+
+**HACS:** add this repository as a custom repository (category
+*Integration*), install **MikroTik Router (API)**, and restart Home
+Assistant.
+
+**Manually:** copy `custom_components/mikrotik_api` into
+`<config>/custom_components/` and restart Home Assistant.
+
+## 3. Add it in Home Assistant
+
+Go to Settings → Devices & services → Add integration → **MikroTik Router
+(API)**.
+
+1. Enter the router IP and the `homeassistant` user and password. Keep
+   *Use API-SSL* on and *Verify SSL* off, because the certificate is
+   self-signed.
+2. Pick the **WAN interface** (`ether1`, or `pppoe-out1` for PPPoE), the
+   **LAN interface** (usually `bridge`), and any extra interfaces you want
+   switches for.
+
+To change the interfaces or the update interval (10 s by default), open the
+integration's **Configure** menu.
+
+## Entities
+
+Entity IDs start with your router's identity, for example `home_router`.
+
+| Entity | What it is |
+| --- | --- |
+| `sensor.*_wan_download` / `_wan_upload` | WAN rate, averaged over the update interval |
+| `sensor.*_wan_downloaded` / `_wan_uploaded` | WAN byte counters. Feed them to `utility_meter` for daily or monthly usage. |
+| `binary_sensor.*_wan_connected` | WAN link up |
+| `sensor.*_lan_receive_rate` / `_lan_transmit_rate`, `_lan_received` / `_lan_sent` | LAN interface traffic |
+| `sensor.*_cpu_load`, `_memory_used`, `_last_boot` | Router health |
+| `sensor.*_wi_fi_clients` | All Wi-Fi clients |
+| `sensor.*_<ssid>_clients` | Clients on one SSID |
+| `switch.*_wan` | WAN interface on/off |
+| `switch.*_wi_fi_<ssid>` | Turns that SSID on/off on every CAP. Attributes list the interfaces, clients, and whether the SSID is actually broadcasting. |
+| `switch.*_interface_<name>` | Extra interfaces you selected |
+
+New SSIDs show up automatically. You don't need to restart anything.
+
+### Example: guest Wi-Fi for 3 hours
+
+```yaml
+script:
+  guest_wifi_3h:
+    sequence:
+      - action: switch.turn_on
+        target: { entity_id: switch.home_router_wi_fi_guest }
+      - delay: "03:00:00"
+      - action: switch.turn_off
+        target: { entity_id: switch.home_router_wi_fi_guest }
+```
+
+## Cautions
+
+- **Turning the WAN off cuts internet access,** including Nabu Casa or any
   other remote access to Home Assistant. You won't be able to turn it back
-  on from outside your home. Home Assistant on the LAN still reaches the
-  router, so the switch keeps working locally.
-- **Don't add a switch for the LAN interface or bridge** that Home Assistant
-  uses to reach the router. If you turn it off, you lock yourself out.
-- **CAPsMAN:** the switches act on the controller (`/interface/wifi
-  disable`), which is how CAPsMAN-managed interfaces are meant to be
-  controlled. You can't disable them on the CAP itself. For legacy
-  CAPsMAN, follow the comment at the top of the package.
-- **Certificate:** the router uses a self-signed certificate, so the package
-  sets `verify_ssl: false`. The user is limited to the Home Assistant IP.
+  on from outside your home.
+- **Don't add a switch for the interface Home Assistant uses to reach the
+  router,** such as the LAN bridge. If you turn it off, you lock yourself
+  out.
 
-## Alternative: HACS "Mikrotik Router" integration
+## Without a custom integration
 
-If you want everything set up through the UI, including device tracking and
-per-interface entities for every port, install
-[Mikrotik Router](https://github.com/tomaae/homeassistant-mikrotik_router)
-from HACS. Uncomment the `api` service line in `ha-setup.rsc`, because that
-integration uses the API on port 8728 rather than REST. You can keep this
-package alongside it for the CAPsMAN Wi-Fi switches.
+`homeassistant/packages/mikrotik.yaml` is a YAML-only alternative that uses
+the REST API (`www-ssl`) instead of the API. To use it, uncomment the
+`www-ssl` line in `ha-setup.rsc`. Use either the package or the
+integration, not both.
+
+## Development
+
+```
+uv venv -p 3.13 && uv pip install -r requirements_test.txt
+.venv/bin/pytest
+```
+
+The tests use an in-memory fake of the RouterOS API (`tests/fake_routeros.py`).

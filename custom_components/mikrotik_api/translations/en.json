@@ -1,0 +1,93 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to MikroTik router",
+        "description": "Uses the RouterOS API (api-ssl on port 8729, or api on 8728). Run routeros/ha-setup.rsc on the router first.",
+        "data": {
+          "host": "Host",
+          "username": "Username",
+          "password": "Password",
+          "ssl": "Use API-SSL",
+          "verify_ssl": "Verify SSL certificate",
+          "port": "Port"
+        },
+        "data_description": {
+          "host": "IP address of the router (the CAPsMAN controller).",
+          "ssl": "Encrypt the connection (api-ssl service).",
+          "verify_ssl": "Leave off when the router uses a self-signed certificate.",
+          "port": "Leave empty for the default (8729 with SSL, 8728 without)."
+        }
+      },
+      "interfaces": {
+        "title": "Choose interfaces on {router}",
+        "data": {
+          "wan_interface": "WAN interface",
+          "lan_interface": "LAN interface",
+          "switch_interfaces": "Extra interfaces to switch"
+        },
+        "data_description": {
+          "wan_interface": "Gets traffic sensors and an on/off switch. Use pppoe-out1 or similar if your internet connection is PPPoE.",
+          "lan_interface": "Gets traffic sensors only, usually the bridge.",
+          "switch_interfaces": "Other interfaces to create on/off switches for. Wi-Fi networks get switches automatically. Never add the interface Home Assistant uses to reach the router."
+        }
+      },
+      "reauth_confirm": {
+        "title": "Log in to the router again",
+        "data": {
+          "username": "Username",
+          "password": "Password"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Cannot connect. Check that the API service is enabled and allowed from Home Assistant's IP.",
+      "invalid_auth": "Username or password was rejected."
+    },
+    "abort": {
+      "already_configured": "This router is already configured.",
+      "reauth_successful": "Login updated."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "MikroTik options",
+        "data": {
+          "wan_interface": "WAN interface",
+          "lan_interface": "LAN interface",
+          "switch_interfaces": "Extra interfaces to switch",
+          "scan_interval": "Update interval"
+        }
+      }
+    },
+    "abort": {
+      "not_loaded": "The integration must be loaded (router reachable) to change options."
+    }
+  },
+  "entity": {
+    "binary_sensor": {
+      "wan_connected": { "name": "WAN connected" }
+    },
+    "sensor": {
+      "cpu_load": { "name": "CPU load" },
+      "memory_used": { "name": "Memory used" },
+      "wifi_clients": { "name": "Wi-Fi clients" },
+      "last_boot": { "name": "Last boot" },
+      "wan_rx_rate": { "name": "WAN download" },
+      "wan_tx_rate": { "name": "WAN upload" },
+      "wan_rx_bytes": { "name": "WAN downloaded" },
+      "wan_tx_bytes": { "name": "WAN uploaded" },
+      "lan_rx_rate": { "name": "LAN receive rate" },
+      "lan_tx_rate": { "name": "LAN transmit rate" },
+      "lan_rx_bytes": { "name": "LAN received" },
+      "lan_tx_bytes": { "name": "LAN sent" },
+      "network_clients": { "name": "{ssid} clients" }
+    },
+    "switch": {
+      "wan": { "name": "WAN" },
+      "interface": { "name": "Interface {name}" },
+      "wifi_network": { "name": "Wi-Fi {ssid}" }
+    }
+  }
+}
