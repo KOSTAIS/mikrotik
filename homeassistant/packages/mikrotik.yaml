@@ -1,0 +1,246 @@
+# MikroTik router -> Home Assistant, via the RouterOS v7 REST API.
+#
+# Before using, replace throughout this file:
+#   192.168.88.1  -> your router's LAN IP
+#   ether1        -> your WAN interface (use pppoe-out1 etc. for traffic if
+#                    your WAN is PPPoE; keep the physical port for the switch)
+#   bridge        -> your LAN interface
+#   wifi1 / wifi2 -> the CAPsMAN Wi-Fi interfaces you want to switch
+# and add mikrotik_user / mikrotik_password to secrets.yaml.
+#
+# Legacy CAPsMAN (wireless package, /caps-man) instead of the new wifi
+# CAPsMAN: in the switch actions change "interface/wifi" to
+# "caps-man/interface", in the Wi-Fi state resource change "type=wifi" to
+# "type=cap", and in the client-count resource change
+# "interface/wifi/registration-table" to "caps-man/registration-table".
+
+rest:
+  # ---- router health ------------------------------------------------------
+  - resource: https://192.168.88.1/rest/system/resource
+    username: !secret mikrotik_user
+    password: !secret mikrotik_password
+    verify_ssl: false
+    scan_interval: 60
+    sensor:
+      - name: MikroTik CPU load
+        unique_id: mikrotik_cpu_load
+        value_template: "{{ value_json['cpu-load'] | int(0) }}"
+        unit_of_measurement: "%"
+        state_class: measurement
+      - name: MikroTik memory used
+        unique_id: mikrotik_memory_used
+        value_template: >-
+          {% set total = value_json['total-memory'] | int(0) %}
+          {% set free = value_json['free-memory'] | int(0) %}
+          {{ ((total - free) / total * 100) | round(1) if total else 0 }}
+        unit_of_measurement: "%"
+        state_class: measurement
+      - name: MikroTik uptime
+        unique_id: mikrotik_uptime
+        value_template: "{{ value_json.uptime }}"
+      - name: MikroTik RouterOS version
+        unique_id: mikrotik_version
+        value_template: "{{ value_json.version }}"
+
+  # ---- WAN: live rate -----------------------------------------------------
+  - resource: https://192.168.88.1/rest/interface/monitor-traffic
+    method: POST
+    headers:
+      Content-Type: application/json
+    payload: '{"interface": "ether1", "once": ""}'
+    username: !secret mikrotik_user
+    password: !secret mikrotik_password
+    verify_ssl: false
+    scan_interval: 10
+    sensor:
+      - name: MikroTik WAN download
+        unique_id: mikrotik_wan_rx_rate
+        value_template: "{{ (value_json[0]['rx-bits-per-second'] | int(0) / 1000000) | round(2) }}"
+        unit_of_measurement: Mbit/s
+        device_class: data_rate
+        state_class: measurement
+      - name: MikroTik WAN upload
+        unique_id: mikrotik_wan_tx_rate
+        value_template: "{{ (value_json[0]['tx-bits-per-second'] | int(0) / 1000000) | round(2) }}"
+        unit_of_measurement: Mbit/s
+        device_class: data_rate
+        state_class: measurement
+
+  # ---- WAN: state and counters (also drives the WAN switch) ---------------
+  - resource: https://192.168.88.1/rest/interface?name=ether1
+    username: !secret mikrotik_user
+    password: !secret mikrotik_password
+    verify_ssl: false
+    scan_interval: 30
+    sensor:
+      - name: MikroTik WAN downloaded
+        unique_id: mikrotik_wan_rx_bytes
+        value_template: "{{ value_json[0]['rx-byte'] | int(0) }}"
+        unit_of_measurement: B
+        device_class: data_size
+        state_class: total_increasing
+      - name: MikroTik WAN uploaded
+        unique_id: mikrotik_wan_tx_bytes
+        value_template: "{{ value_json[0]['tx-byte'] | int(0) }}"
+        unit_of_measurement: B
+        device_class: data_size
+        state_class: total_increasing
+      - name: MikroTik WAN link downs
+        unique_id: mikrotik_wan_link_downs
+        value_template: "{{ value_json[0]['link-downs'] | int(0) }}"
+        state_class: total_increasing
+    binary_sensor:
+      - name: MikroTik WAN running
+        unique_id: mikrotik_wan_running
+        device_class: connectivity
+        value_template: "{{ value_json[0].running == 'true' }}"
+      - name: MikroTik WAN enabled
+        unique_id: mikrotik_wan_enabled
+        value_template: "{{ value_json[0].disabled == 'false' }}"
+
+  # ---- LAN: live rate -----------------------------------------------------
+  # rx on the LAN bridge = traffic coming from LAN clients (their upload)
+  - resource: https://192.168.88.1/rest/interface/monitor-traffic
+    method: POST
+    headers:
+      Content-Type: application/json
+    payload: '{"interface": "bridge", "once": ""}'
+    username: !secret mikrotik_user
+    password: !secret mikrotik_password
+    verify_ssl: false
+    scan_interval: 10
+    sensor:
+      - name: MikroTik LAN rx
+        unique_id: mikrotik_lan_rx_rate
+        value_template: "{{ (value_json[0]['rx-bits-per-second'] | int(0) / 1000000) | round(2) }}"
+        unit_of_measurement: Mbit/s
+        device_class: data_rate
+        state_class: measurement
+      - name: MikroTik LAN tx
+        unique_id: mikrotik_lan_tx_rate
+        value_template: "{{ (value_json[0]['tx-bits-per-second'] | int(0) / 1000000) | round(2) }}"
+        unit_of_measurement: Mbit/s
+        device_class: data_rate
+        state_class: measurement
+
+  # ---- LAN: counters ------------------------------------------------------
+  - resource: https://192.168.88.1/rest/interface?name=bridge
+    username: !secret mikrotik_user
+    password: !secret mikrotik_password
+    verify_ssl: false
+    scan_interval: 60
+    sensor:
+      - name: MikroTik LAN received
+        unique_id: mikrotik_lan_rx_bytes
+        value_template: "{{ value_json[0]['rx-byte'] | int(0) }}"
+        unit_of_measurement: B
+        device_class: data_size
+        state_class: total_increasing
+      - name: MikroTik LAN sent
+        unique_id: mikrotik_lan_tx_bytes
+        value_template: "{{ value_json[0]['tx-byte'] | int(0) }}"
+        unit_of_measurement: B
+        device_class: data_size
+        state_class: total_increasing
+
+  # ---- CAPsMAN Wi-Fi interfaces: state ------------------------------------
+  - resource: https://192.168.88.1/rest/interface?type=wifi&.proplist=name,disabled,running
+    username: !secret mikrotik_user
+    password: !secret mikrotik_password
+    verify_ssl: false
+    scan_interval: 30
+    binary_sensor:
+      - name: MikroTik wifi1 enabled
+        unique_id: mikrotik_wifi1_enabled
+        value_template: >-
+          {{ value_json | selectattr('name', 'eq', 'wifi1')
+             | map(attribute='disabled') | first | default('true') == 'false' }}
+      - name: MikroTik wifi2 enabled
+        unique_id: mikrotik_wifi2_enabled
+        value_template: >-
+          {{ value_json | selectattr('name', 'eq', 'wifi2')
+             | map(attribute='disabled') | first | default('true') == 'false' }}
+
+  # ---- Wi-Fi clients connected through CAPsMAN ----------------------------
+  - resource: https://192.168.88.1/rest/interface/wifi/registration-table?.proplist=interface
+    username: !secret mikrotik_user
+    password: !secret mikrotik_password
+    verify_ssl: false
+    scan_interval: 60
+    sensor:
+      - name: MikroTik Wi-Fi clients
+        unique_id: mikrotik_wifi_clients
+        value_template: "{{ value_json | length }}"
+        unit_of_measurement: clients
+        state_class: measurement
+
+# Generic enable/disable call. menu is the RouterOS menu path, e.g.
+# "interface" (WAN), "interface/wifi" (new CAPsMAN), "caps-man/interface".
+rest_command:
+  mikrotik_interface:
+    url: "https://192.168.88.1/rest/{{ menu }}/{{ 'enable' if enable else 'disable' }}"
+    method: post
+    content_type: application/json
+    payload: '{"numbers": "{{ name }}"}'
+    username: !secret mikrotik_user
+    password: !secret mikrotik_password
+    verify_ssl: false
+
+template:
+  - switch:
+      - name: MikroTik WAN
+        unique_id: mikrotik_switch_wan
+        icon: mdi:wan
+        state: "{{ is_state('binary_sensor.mikrotik_wan_enabled', 'on') }}"
+        turn_on:
+          - action: rest_command.mikrotik_interface
+            data: { menu: interface, name: ether1, enable: true }
+          - action: homeassistant.update_entity
+            target: { entity_id: binary_sensor.mikrotik_wan_enabled }
+        turn_off:
+          - action: rest_command.mikrotik_interface
+            data: { menu: interface, name: ether1, enable: false }
+          - action: homeassistant.update_entity
+            target: { entity_id: binary_sensor.mikrotik_wan_enabled }
+
+      - name: MikroTik wifi1
+        unique_id: mikrotik_switch_wifi1
+        icon: mdi:wifi
+        state: "{{ is_state('binary_sensor.mikrotik_wifi1_enabled', 'on') }}"
+        turn_on:
+          - action: rest_command.mikrotik_interface
+            data: { menu: interface/wifi, name: wifi1, enable: true }
+          - action: homeassistant.update_entity
+            target: { entity_id: binary_sensor.mikrotik_wifi1_enabled }
+        turn_off:
+          - action: rest_command.mikrotik_interface
+            data: { menu: interface/wifi, name: wifi1, enable: false }
+          - action: homeassistant.update_entity
+            target: { entity_id: binary_sensor.mikrotik_wifi1_enabled }
+
+      - name: MikroTik wifi2
+        unique_id: mikrotik_switch_wifi2
+        icon: mdi:wifi
+        state: "{{ is_state('binary_sensor.mikrotik_wifi2_enabled', 'on') }}"
+        turn_on:
+          - action: rest_command.mikrotik_interface
+            data: { menu: interface/wifi, name: wifi2, enable: true }
+          - action: homeassistant.update_entity
+            target: { entity_id: binary_sensor.mikrotik_wifi2_enabled }
+        turn_off:
+          - action: rest_command.mikrotik_interface
+            data: { menu: interface/wifi, name: wifi2, enable: false }
+          - action: homeassistant.update_entity
+            target: { entity_id: binary_sensor.mikrotik_wifi2_enabled }
+
+# Daily / monthly WAN usage from the byte counters.
+utility_meter:
+  mikrotik_wan_download_daily:
+    source: sensor.mikrotik_wan_downloaded
+    cycle: daily
+  mikrotik_wan_download_monthly:
+    source: sensor.mikrotik_wan_downloaded
+    cycle: monthly
+  mikrotik_wan_upload_monthly:
+    source: sensor.mikrotik_wan_uploaded
+    cycle: monthly
