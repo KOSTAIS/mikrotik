@@ -13,7 +13,9 @@
 :local haUser "homeassistant"
 :local haPass "CHANGE-ME-to-a-long-random-password"
 # Addresses allowed to reach the API (and, if enabled below, HTTPS/REST).
-# Add your admin subnet here (comma separated) if you also use WebFig over HTTPS.
+# Either one host with /32 ("192.168.1.50/32") or a whole network with its
+# host part zeroed ("192.168.1.0/24"). "192.168.1.50/24" is rejected.
+# Separate several entries with commas.
 :local allowedFrom "192.168.88.10/32"
 
 # --- user ------------------------------------------------------------------
@@ -52,17 +54,19 @@
 # (REST), or "api" (port 8728) only if you untick "Use API-SSL".
 :local haServices {"api-ssl"}
 
-# RouterOS 7.24 renamed "address" to "available-from". The command is built
-# with :parse so older versions fall back to "address" instead of failing.
+# RouterOS 7.24 renamed "address" to "available-from"; use whichever this
+# router has. The command is built with :parse so the unknown name on the
+# other version doesn't stop the script from loading.
+:local accessArg "address"
+:do {
+    :local probe [:parse ":return [/ip service get [find name=\"api-ssl\"] available-from]"]
+    :local value [$probe]
+    :set accessArg "available-from"
+} on-error={}
+
 :foreach svc in=$haServices do={
-    :local cmd "/ip service set $svc certificate=ha-https disabled=no"
-    :do {
-        :local f [:parse "$cmd available-from=\"$allowedFrom\""]
-        $f
-    } on-error={
-        :local f [:parse "$cmd address=\"$allowedFrom\""]
-        $f
-    }
+    :local f [:parse "/ip service set [find name=\"$svc\"] certificate=ha-https disabled=no $accessArg=\"$allowedFrom\""]
+    $f
 }
 
 :put "Home Assistant access ready: api-ssl port 8729, user=$haUser"
