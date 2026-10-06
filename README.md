@@ -28,7 +28,14 @@ Run this on the CAPsMAN controller.
 
    The script creates a `homeassistant` user that can only log in from the
    Home Assistant IP. It also enables **api-ssl** (port 8729) with a
-   self-signed certificate.
+   certificate signed by a local CA (`ha-ca`). You can run it again safely:
+   it removes unsigned certificates left by a failed run and leaves
+   existing ones alone.
+
+   To check it worked, run `/certificate print where name~"ha-"`. Both
+   certificates should show the `K` (private key) flag, and `ha-ca` should
+   also show `A` (authority). `/ip service print where name=api-ssl` should
+   show the `ha-https` certificate.
 
 ### Make your on-demand Wi-Fi networks switchable
 
@@ -160,8 +167,8 @@ script:
 ## Without a custom integration
 
 `homeassistant/packages/mikrotik.yaml` is a YAML-only alternative that uses
-the REST API (`www-ssl`) instead of the API. To use it, uncomment the
-`www-ssl` line in `ha-setup.rsc`. Use either the package or the
+the REST API (`www-ssl`) instead of the API. To use it, add `"www-ssl"` to
+`haServices` in `ha-setup.rsc`. Use either the package or the
 integration, not both.
 
 ## Development

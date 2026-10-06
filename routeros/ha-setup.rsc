@@ -29,20 +29,40 @@
 }
 
 # --- TLS certificate -------------------------------------------------------
+# A small local CA signs the API certificate (RouterOS won't self-sign a
+# certificate that lacks key-cert-sign: "CA not found").
+# First drop unsigned leftovers from an earlier failed run.
+:foreach c in=[/certificate find where (name="ha-ca" or name="ha-https")] do={
+    :if ([:len [/certificate get $c fingerprint]] = 0) do={ /certificate remove $c }
+}
+:if ([:len [/certificate find name="ha-ca"]] = 0) do={
+    /certificate add name="ha-ca" common-name="ha-ca" key-usage="key-cert-sign,crl-sign" days-valid=3650
+    /certificate sign "ha-ca"
+    # signing runs in the background on slow devices
+    :delay 10s
+}
 :if ([:len [/certificate find name="ha-https"]] = 0) do={
     /certificate add name="ha-https" common-name="router" key-usage="digital-signature,key-encipherment,tls-server" days-valid=3650
-    /certificate sign "ha-https"
-    # signing runs in the background on slow devices
+    /certificate sign "ha-https" ca="ha-ca"
     :delay 10s
 }
 
 # --- API service (custom integration) --------------------------------------
-/ip service set api-ssl certificate="ha-https" address=$allowedFrom disabled=no
+# Services to enable. Add "www-ssl" only for homeassistant/packages/mikrotik.yaml
+# (REST), or "api" (port 8728) only if you untick "Use API-SSL".
+:local haServices {"api-ssl"}
 
-# Optional: REST API, only for homeassistant/packages/mikrotik.yaml.
-# /ip service set www-ssl certificate="ha-https" address=$allowedFrom disabled=no
-
-# Optional: unencrypted API on 8728. Only if you untick "Use API-SSL".
-# /ip service set api address=$allowedFrom disabled=no
+# RouterOS 7.24 renamed "address" to "available-from". The command is built
+# with :parse so older versions fall back to "address" instead of failing.
+:foreach svc in=$haServices do={
+    :local cmd "/ip service set $svc certificate=ha-https disabled=no"
+    :do {
+        :local f [:parse "$cmd available-from=\"$allowedFrom\""]
+        $f
+    } on-error={
+        :local f [:parse "$cmd address=\"$allowedFrom\""]
+        $f
+    }
+}
 
 :put "Home Assistant access ready: api-ssl port 8729, user=$haUser"
