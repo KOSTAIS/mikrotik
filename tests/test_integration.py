@@ -96,7 +96,18 @@ async def test_entities(hass: HomeAssistant, entry, fake_api: FakeApi, mock_conn
     assert hass.states.get("sensor.home_router_cpu_load").state == "7"
     assert hass.states.get("sensor.home_router_memory_used").state == "25.0"
     assert hass.states.get("sensor.home_router_wi_fi_clients").state == "3"
-    assert hass.states.get("sensor.home_router_home_clients").state == "3"
+    home = hass.states.get("sensor.home_router_home_clients")
+    assert home.state == "3"
+    assert [c["name"] for c in home.attributes["clients"]] == [
+        "AA:BB:CC:00:00:03",
+        "Kitchen plug",
+        "my-phone",
+    ]
+    assert home.attributes["clients"][2]["mac"] == "AA:BB:CC:00:00:01"
+    assert home.attributes["clients"][2]["ssid"] == "Home"
+    total = hass.states.get("sensor.home_router_wi_fi_clients")
+    assert len(total.attributes["clients"]) == 3
+    assert hass.states.get("switch.home_router_wi_fi_home").attributes["clients"] == 3
     assert hass.states.get("sensor.home_router_guest_clients").state == "0"
     assert hass.states.get("sensor.home_router_last_boot").state not in ("unknown", "unavailable")
     # no rate until there are two polls

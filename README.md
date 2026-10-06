@@ -93,13 +93,47 @@ Entity IDs start with your router's identity, for example `home_router`.
 | `binary_sensor.*_wan_connected` | WAN link up |
 | `sensor.*_lan_receive_rate` / `_lan_transmit_rate`, `_lan_received` / `_lan_sent` | LAN interface traffic |
 | `sensor.*_cpu_load`, `_memory_used`, `_last_boot` | Router health |
-| `sensor.*_wi_fi_clients` | All Wi-Fi clients |
-| `sensor.*_<ssid>_clients` | Clients on one SSID |
+| `sensor.*_wi_fi_clients` | Number of Wi-Fi clients. Its `clients` attribute lists every client (see below). |
+| `sensor.*_<ssid>_clients` | Number of clients on one SSID, with the same `clients` list for that SSID |
 | `switch.*_wan` | WAN interface on/off |
 | `switch.*_wi_fi_<ssid>` | Turns that SSID on/off on every CAP. Attributes list the interfaces, clients, and whether the SSID is actually broadcasting. |
 | `switch.*_interface_<name>` | Extra interfaces you selected |
 
 New SSIDs show up automatically. You don't need to restart anything.
+
+### Connected clients
+
+Each client in the `clients` attribute has:
+
+| Field | Source |
+| --- | --- |
+| `name` | DHCP lease comment if you set one, otherwise the host name, otherwise the MAC |
+| `host_name` | Host name the device sent to the DHCP server |
+| `mac`, `signal`, `uptime`, `interface` | Wi-Fi registration table on the CAPsMAN controller |
+| `ssid` | Network the device is connected to |
+| `ip` | DHCP lease |
+
+Host names and IPs come from the DHCP server on the same router. Devices that
+don't send a host name show their MAC. To give one a readable name, add a
+comment to its lease (`/ip dhcp-server lease set [find mac-address=...]
+comment="Kitchen plug"`). The list isn't saved to history, to keep the
+database small.
+
+Dashboard card (Markdown card) showing all clients:
+
+```yaml
+type: markdown
+title: Wi-Fi clients
+content: |
+  | Name | SSID | MAC | IP | Signal |
+  |---|---|---|---|---|
+  {% for c in state_attr('sensor.mikrotik_router_wi_fi_clients', 'clients') or [] -%}
+  | {{ c.name }} | {{ c.ssid }} | {{ c.mac }} | {{ c.ip or '-' }} | {{ c.signal or '-' }} |
+  {% endfor %}
+```
+
+Replace `mikrotik_router` with your router's entity prefix. For one SSID
+only, use `sensor.mikrotik_router_old_wifi_clients` instead.
 
 ### Example: guest Wi-Fi for 3 hours
 

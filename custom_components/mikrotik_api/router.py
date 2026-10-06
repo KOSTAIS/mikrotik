@@ -67,6 +67,37 @@ class Interface:
 
 
 @dataclass(slots=True)
+class WifiClient:
+    """A device connected to Wi-Fi, enriched with its DHCP lease."""
+
+    mac: str
+    interface: str
+    ssid: str | None = None
+    host_name: str | None = None
+    comment: str | None = None
+    ip: str | None = None
+    signal: int | None = None
+    uptime: str | None = None
+
+    @property
+    def name(self) -> str:
+        """Best human name: lease comment, then DHCP host name, then MAC."""
+        return self.comment or self.host_name or self.mac
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "host_name": self.host_name,
+            "mac": self.mac,
+            "ip": self.ip,
+            "ssid": self.ssid,
+            "interface": self.interface,
+            "signal": self.signal,
+            "uptime": self.uptime,
+        }
+
+
+@dataclass(slots=True)
 class WifiInterface:
     """Row from the Wi-Fi/CAPsMAN interface menu."""
 
@@ -75,7 +106,7 @@ class WifiInterface:
     disabled: bool
     dynamic: bool
     running: bool
-    clients: int = 0
+    clients: list[WifiClient] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -94,8 +125,8 @@ class WifiNetwork:
         return any(i.running for i in self.interfaces)
 
     @property
-    def clients(self) -> int:
-        return sum(i.clients for i in self.interfaces)
+    def clients(self) -> list[WifiClient]:
+        return [c for i in self.interfaces for c in i.clients]
 
     @property
     def switchable(self) -> bool:
@@ -125,8 +156,8 @@ class RouterData:
     rates: dict[str, tuple[float, float]] = field(default_factory=dict)
 
     @property
-    def wifi_clients(self) -> int:
-        return sum(n.clients for n in self.networks.values())
+    def wifi_clients(self) -> list[WifiClient]:
+        return [c for n in self.networks.values() for c in n.clients]
 
 
 _UPTIME_RE = re.compile(r"(\d+)([wdhms])")
@@ -172,7 +203,7 @@ def compute_rates(previous: RouterData | None, current: RouterData) -> None:
 def group_networks(
     interfaces: list[dict[str, Any]],
     configurations: dict[str, str | None],
-    clients_per_interface: dict[str, int],
+    clients_per_interface: dict[str, list[WifiClient]],
 ) -> dict[str, WifiNetwork]:
     """Group Wi-Fi interfaces by the SSID they broadcast."""
     networks: dict[str, WifiNetwork] = {}
@@ -188,6 +219,9 @@ def group_networks(
             or name
         )
         ssid = str(ssid)
+        clients = clients_per_interface.get(name, [])
+        for client in clients:
+            client.ssid = ssid
         networks.setdefault(ssid, WifiNetwork(ssid=ssid)).interfaces.append(
             WifiInterface(
                 id=row[".id"],
@@ -195,7 +229,7 @@ def group_networks(
                 disabled=bool(row.get("disabled", False)),
                 dynamic=bool(row.get("dynamic", False)),
                 running=bool(row.get("running", False)),
-                clients=clients_per_interface.get(name, 0),
+                clients=clients,
             )
         )
     return networks
@@ -315,7 +349,8 @@ class RouterClient:
             interfaces = {i.name: i for i in _read_interfaces(api)}
             if self._flavor is None:
                 self._flavor = _detect_flavor(api)
-            networks = _read_networks(api, self._flavor)
+            leases = _read_leases(api) if self._flavor is not WifiFlavor.NONE else {}
+            networks = _read_networks(api, self._flavor, leases)
             return RouterData(
                 resource=resource,
                 interfaces=interfaces,
@@ -399,7 +434,11 @@ def _detect_flavor(api: librouteros.Api) -> WifiFlavor:
     return found
 
 
-def _read_networks(api: librouteros.Api, flavor: WifiFlavor) -> dict[str, WifiNetwork]:
+def _read_networks(
+    api: librouteros.Api,
+    flavor: WifiFlavor,
+    leases: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, WifiNetwork]:
     if flavor is WifiFlavor.NONE:
         return {}
     menus = WIFI_MENUS[flavor]
@@ -409,8 +448,43 @@ def _read_networks(api: librouteros.Api, flavor: WifiFlavor) -> dict[str, WifiNe
         for row in api.path(*menus["configuration"])
         if "name" in row
     }
-    clients: dict[str, int] = {}
+    leases = leases or {}
+    clients: dict[str, list[WifiClient]] = {}
     for row in api.path(*menus["registration"]):
-        if (iface := row.get("interface")) is not None:
-            clients[str(iface)] = clients.get(str(iface), 0) + 1
+        iface = row.get("interface")
+        mac = str(row.get("mac-address", "")).upper()
+        if iface is None or not mac:
+            continue
+        lease = leases.get(mac, {})
+        signal = row.get("signal", row.get("rx-signal"))
+        clients.setdefault(str(iface), []).append(
+            WifiClient(
+                mac=mac,
+                interface=str(iface),
+                host_name=_str_or_none(lease.get("host-name")),
+                comment=_str_or_none(lease.get("comment")),
+                ip=_str_or_none(lease.get("active-address") or lease.get("address")),
+                signal=signal if isinstance(signal, int) else None,
+                uptime=_str_or_none(row.get("uptime")),
+            )
+        )
     return group_networks(interfaces, configurations, clients)
+
+
+def _read_leases(api: librouteros.Api) -> dict[str, dict[str, Any]]:
+    """DHCP leases by MAC; empty if this router runs no DHCP server."""
+    try:
+        rows = tuple(api.path("ip", "dhcp-server", "lease"))
+    except TrapError:
+        return {}
+    leases: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        mac = str(row.get("mac-address", "")).upper()
+        # prefer the bound lease when a MAC has several (static + dynamic)
+        if mac and (mac not in leases or row.get("status") == "bound"):
+            leases[mac] = row
+    return leases
+
+
+def _str_or_none(value: Any) -> str | None:
+    return str(value) if value not in (None, "") else None

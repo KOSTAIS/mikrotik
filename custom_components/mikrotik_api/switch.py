@@ -114,7 +114,7 @@ class WifiNetworkSwitch(_RouterSwitch):
             "ssid": network.ssid,
             "interfaces": [i.name for i in network.interfaces],
             "running": network.running,
-            "clients": network.clients,
+            "clients": len(network.clients),
             "switchable": network.switchable,
         }
 

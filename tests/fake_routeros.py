@@ -42,9 +42,14 @@ def sample_router() -> dict[tuple[str, ...], list[dict[str, Any]]]:
             {".id": "*B", "name": "cfg-guest", "ssid": "Guest"},
         ],
         ("interface", "wifi", "registration-table"): [
-            {".id": "*R1", "interface": "cap-wifi1"},
-            {".id": "*R2", "interface": "cap-wifi1"},
-            {".id": "*R3", "interface": "cap-wifi2"},
+            {".id": "*R1", "interface": "cap-wifi1", "mac-address": "aa:bb:cc:00:00:01", "signal": -52, "uptime": "1h2m3s"},
+            {".id": "*R2", "interface": "cap-wifi1", "mac-address": "AA:BB:CC:00:00:02", "signal": -70, "uptime": "5m"},
+            {".id": "*R3", "interface": "cap-wifi2", "mac-address": "AA:BB:CC:00:00:03", "signal": -60, "uptime": "2d"},
+        ],
+        ("ip", "dhcp-server", "lease"): [
+            {".id": "*L1", "mac-address": "AA:BB:CC:00:00:01", "address": "192.168.88.21", "host-name": "my-phone", "status": "bound"},
+            {".id": "*L2", "mac-address": "AA:BB:CC:00:00:02", "address": "192.168.88.22", "host-name": "esp-123", "comment": "Kitchen plug", "status": "bound"},
+            {".id": "*L3", "mac-address": "AA:BB:CC:00:00:02", "address": "192.168.88.99", "status": "waiting"},
         ],
     }
 

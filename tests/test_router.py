@@ -10,6 +10,7 @@ from custom_components.mikrotik_api.router import (
     DynamicInterfaceError,
     RouterClient,
     RouterError,
+    WifiClient,
     WifiFlavor,
     compute_rates,
     group_networks,
@@ -49,13 +50,17 @@ def test_group_networks_by_ssid() -> None:
             {".id": "*5", "name": 5, "dynamic": True},
         ],
         {"cfg-home": "Home"},
-        {"a": 2, "b": 1},
+        {
+            "a": [WifiClient(mac="M1", interface="a"), WifiClient(mac="M2", interface="a")],
+            "b": [WifiClient(mac="M3", interface="b")],
+        },
     )
     assert set(networks) == {"Home", "Inline", "d", "5"}
     home = networks["Home"]
     assert [i.name for i in home.interfaces] == ["a", "b"]
     assert home.enabled  # one of two still enabled
-    assert home.clients == 3
+    assert [c.mac for c in home.clients] == ["M1", "M2", "M3"]
+    assert {c.ssid for c in home.clients} == {"Home"}
     assert home.switchable
     assert not networks["5"].switchable
 
@@ -65,9 +70,9 @@ def test_fetch_and_rates(fake_api: FakeApi, mock_connect) -> None:
     first = c.fetch()
     assert first.wifi_flavor is WifiFlavor.WIFI
     assert set(first.networks) == {"Home", "Guest"}
-    assert first.networks["Home"].clients == 3
+    assert len(first.networks["Home"].clients) == 3
     assert not first.networks["Guest"].enabled
-    assert first.wifi_clients == 3
+    assert len(first.wifi_clients) == 3
     assert first.interfaces["ether1"].rx_byte == 1000
 
     fake_api.menus[("interface",)][0]["rx-byte"] = 1000 + 125_000
@@ -180,3 +185,30 @@ def test_reconnects_after_dropped_connection(fake_api: FakeApi, mock_connect) ->
     assert data.interfaces
     assert mock_connect.call_count == 2
     assert broken.closed
+
+
+def test_clients_get_host_name_and_ip(mock_connect) -> None:
+    clients = {c.mac: c for c in client().fetch().wifi_clients}
+    phone = clients["AA:BB:CC:00:00:01"]  # MAC case differs between tables
+    assert phone.as_dict() == {
+        "name": "my-phone",
+        "host_name": "my-phone",
+        "mac": "AA:BB:CC:00:00:01",
+        "ip": "192.168.88.21",
+        "ssid": "Home",
+        "interface": "cap-wifi1",
+        "signal": -52,
+        "uptime": "1h2m3s",
+    }
+    plug = clients["AA:BB:CC:00:00:02"]
+    assert plug.name == "Kitchen plug"  # lease comment wins over host name
+    assert plug.ip == "192.168.88.22"  # bound lease, not the stale one
+    unknown = clients["AA:BB:CC:00:00:03"]
+    assert unknown.host_name is None and unknown.name == "AA:BB:CC:00:00:03"
+
+
+def test_clients_without_dhcp_server(fake_api: FakeApi, mock_connect) -> None:
+    del fake_api.menus[("ip", "dhcp-server", "lease")]
+    clients = client().fetch().wifi_clients
+    assert len(clients) == 3
+    assert all(c.host_name is None and c.ssid == "Home" for c in clients)

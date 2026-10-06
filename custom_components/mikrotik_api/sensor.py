@@ -26,7 +26,7 @@ from homeassistant.util import dt as dt_util
 from .const import CONF_LAN_INTERFACE, CONF_WAN_INTERFACE
 from .coordinator import MikrotikConfigEntry, MikrotikCoordinator
 from .entity import MikrotikEntity
-from .router import RouterData, parse_uptime
+from .router import RouterData, WifiClient, parse_uptime
 
 PARALLEL_UPDATES = 0
 
@@ -36,6 +36,11 @@ class RouterSensorDescription(SensorEntityDescription):
     """Sensor computed from the whole RouterData."""
 
     value_fn: Callable[[RouterData], Any]
+    attributes_fn: Callable[[RouterData], dict[str, Any]] | None = None
+
+
+def _clients_attributes(clients: list[WifiClient]) -> dict[str, Any]:
+    return {"clients": [c.as_dict() for c in sorted(clients, key=lambda c: c.name.lower())]}
 
 
 def _memory_used(data: RouterData) -> float | None:
@@ -65,7 +70,8 @@ SYSTEM_SENSORS: tuple[RouterSensorDescription, ...] = (
         key="wifi_clients",
         translation_key="wifi_clients",
         state_class=SensorStateClass.MEASUREMENT,
-        value_fn=lambda d: d.wifi_clients,
+        value_fn=lambda d: len(d.wifi_clients),
+        attributes_fn=lambda d: _clients_attributes(d.wifi_clients),
     ),
 )
 
@@ -159,6 +165,8 @@ class RouterSensor(MikrotikEntity, SensorEntity):
     """System-level sensor."""
 
     entity_description: RouterSensorDescription
+    # the client list changes constantly; keep it out of the history database
+    _unrecorded_attributes = frozenset({"clients"})
 
     def __init__(
         self, coordinator: MikrotikCoordinator, description: RouterSensorDescription
@@ -169,6 +177,12 @@ class RouterSensor(MikrotikEntity, SensorEntity):
     @property
     def native_value(self) -> Any:
         return self.entity_description.value_fn(self.coordinator.data)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        if self.entity_description.attributes_fn is None:
+            return None
+        return self.entity_description.attributes_fn(self.coordinator.data)
 
 
 class InterfaceSensor(MikrotikEntity, SensorEntity):
@@ -224,6 +238,7 @@ class NetworkClientsSensor(MikrotikEntity, SensorEntity):
 
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_translation_key = "network_clients"
+    _unrecorded_attributes = frozenset({"clients"})
 
     def __init__(self, coordinator: MikrotikCoordinator, ssid: str) -> None:
         super().__init__(coordinator, f"wifi_{ssid}_clients")
@@ -236,4 +251,9 @@ class NetworkClientsSensor(MikrotikEntity, SensorEntity):
 
     @property
     def native_value(self) -> int:
-        return self.coordinator.data.networks[self._ssid].clients
+        return len(self.coordinator.data.networks[self._ssid].clients)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        network = self.coordinator.data.networks.get(self._ssid)
+        return _clients_attributes(network.clients if network else [])
